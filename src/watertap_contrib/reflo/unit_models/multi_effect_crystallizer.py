@@ -483,7 +483,7 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
                         f"Degrees of freedom in first effect must be zero during initialization, "
                         f"but has {degrees_of_freedom(eff.effect)}. Check inlet conditions and re-initialize."
                     )
-                
+
                 eff.effect.initialize(**init_args)
 
                 self.inlet_conc = inlet_conc = (
@@ -548,10 +548,9 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
                     0
                 ].pressure_sat.value
 
-
             for k, v in init_args.items():
                 self.inlets[n][k] = v
-            
+
             total_mass_flow_water_in_init += (
                 eff.effect.properties_in[0].flow_mass_phase_comp["Liq", "H2O"].value
             )
@@ -573,7 +572,7 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
             eff.effect.properties_in[0].flow_mass_phase_comp["Liq", "NaCl"].unfix()
 
             init_log.info(f"Initialization of Effect {n} Complete.")
-    
+
         self.eq_mass_transfer_term_liq_water.activate()
         self.eq_mass_transfer_term_liq_salt.activate()
         self.eq_overall_steam_flow.activate()
@@ -585,7 +584,7 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
         self.recovery_vol_phase["Liq"].set_value(
             total_vol_flow_water_out_init / total_vol_flow_water_in_init
         )
-        
+
         # Guess mass transfer terms
         self.control_volume.mass_transfer_term[0, "Liq", "H2O"].set_value(
             -1 * total_mass_flow_water_out_init
@@ -599,7 +598,7 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
             inlet_conc
         )
         self.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "H2O"].unfix()
-        
+
         # Guess inlet steam flow
         self.control_volume.properties_in[0].flow_mass_phase_comp[
             "Vap", "H2O"
@@ -619,29 +618,34 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
             init_args["state_args_pure_water"]["temperature"]
             # 340
         )
-        self.control_volume.properties_out[0].pressure.set_value(
-            101325
-        )
-        
+        self.control_volume.properties_out[0].pressure.set_value(101325)
 
         with idaeslog.solver_log(init_log, idaeslog.DEBUG) as slc:
             res1 = opt.solve(self, tee=slc.tee)
-            init_log.info(f"Initialization of {self.name}: first solve {res1.solver.termination_condition}.")
+            init_log.info(
+                f"Initialization of {self.name}: first solve {res1.solver.termination_condition}."
+            )
             self.control_volume.properties_in[0].flow_mass_phase_comp[
                 "Liq", "H2O"
             ].fix()
             res2 = opt.solve(self, tee=slc.tee)
-            init_log.info(f"Initialization of {self.name}: second solve {res2.solver.termination_condition}.")
+            init_log.info(
+                f"Initialization of {self.name}: second solve {res2.solver.termination_condition}."
+            )
             for n, eff in self.effects.items():
                 if n not in [self.first_effect, self.last_effect]:
-                    eff.effect.properties_in[0].conc_mass_phase_comp["Liq", "NaCl"].fix()
+                    eff.effect.properties_in[0].conc_mass_phase_comp[
+                        "Liq", "NaCl"
+                    ].fix()
             res3 = opt.solve(self, tee=slc.tee)
-        
-        init_log.info(f"Initialization of {self.name}: final solve {res3.solver.termination_condition}.")
+
+        init_log.info(
+            f"Initialization of {self.name}: final solve {res3.solver.termination_condition}."
+        )
 
         if not check_optimal_termination(res3):
             raise InitializationError(f"Unit model {self.name} failed to initialize")
-        
+
         init_log.info(f"Initialization of {self.name} complete.")
 
     def calculate_scaling_factors(self):

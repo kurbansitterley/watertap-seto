@@ -79,7 +79,7 @@ class CrystallizerEffectData(CrystallizationData):
 
     def build(self):
         super().build()
-        
+
         self.properties_in[0].conc_mass_phase_comp["Liq", "NaCl"]
         self.properties_in[0].flow_vol_phase["Liq"]
 
@@ -346,7 +346,7 @@ class CrystallizerEffectData(CrystallizationData):
             solver=solver,
             state_args=state_args_solids,
         )
-        
+
         if state_args_vapor is None:
             state_args_vapor = deepcopy(state_args)
 
@@ -372,15 +372,13 @@ class CrystallizerEffectData(CrystallizationData):
                 if (p, j) == ("Liq", "NaCl"):
                     state_args_pure_water["flow_mass_phase_comp"][p, j] = 1e-8
                 if (p, j) == ("Liq", "H2O"):
-                    state_args_pure_water["flow_mass_phase_comp"][p, j] = state_args_vapor[
-                        "flow_mass_phase_comp"
-                    ]["Vap", j]
+                    state_args_pure_water["flow_mass_phase_comp"][p, j] = (
+                        state_args_vapor["flow_mass_phase_comp"]["Vap", j]
+                    )
                 elif p in ["Vap", "Sol"]:
                     state_args_pure_water["flow_mass_phase_comp"][p, j] = 1e-8
 
-        self.properties_pure_water[0].pressure_sat.set_value(
-            pressure_sat_init
-        )
+        self.properties_pure_water[0].pressure_sat.set_value(pressure_sat_init)
         self.properties_pure_water.initialize(
             outlvl=outlvl,
             optarg=optarg,
