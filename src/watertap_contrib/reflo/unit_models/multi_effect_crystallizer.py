@@ -34,6 +34,8 @@ from idaes.core import (
     FlowsheetBlock,
     UnitModelCostingBlock,
 )
+from pyomo.util.calc_var_value import calculate_variable_from_constraint
+
 from idaes.core.util.exceptions import InitializationError, ConfigurationError
 import idaes.core.util.scaling as iscale
 from idaes.core.util.config import is_physical_parameter_block
@@ -321,17 +323,21 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
                 total_mass_flow_water_out_expr
             )
 
-        @self.Constraint(doc="Mass transfer term for vapor water")
-        def eq_mass_transfer_term_vap_water(b):
-            return b.control_volume.mass_transfer_term[0, "Vap", "H2O"] == -1 * (
-                b.effects[1].effect.heating_steam[0].flow_mass_phase_comp["Vap", "H2O"]
-            )
+        # @self.Constraint(doc="Mass transfer term for vapor water")
+        # def eq_mass_transfer_term_vap_water(b):
+        #     return b.control_volume.mass_transfer_term[0, "Vap", "H2O"] == -1 * (
+        #         b.effects[1].effect.heating_steam[0].flow_mass_phase_comp["Vap", "H2O"]
+        #     )
+        # self.control_volume.mass_transfer_term[0, "Vap", "H2O"].fix(0)
 
         @self.Constraint(doc="Mass transfer term for salt in liquid phase")
         def eq_mass_transfer_term_liq_salt(b):
             return b.control_volume.mass_transfer_term[0, "Liq", "NaCl"] == -1 * (
                 total_mass_flow_salt_out_expr
             )
+
+        # self.control_volume.properties_in[0].flow_mass_phase_comp["Vap", "H2O"].fix(0)
+        self.control_volume.properties_out[0].flow_mass_phase_comp["Vap", "H2O"].fix(0)
 
         @self.Constraint(doc="Steam flow")
         def eq_overall_steam_flow(b):
@@ -408,12 +414,28 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
         Returns: None
         """
 
-        init_args = dict(
+        def get_state_args(p_blk):
+            state_args = {}
+            state_dict = p_blk[0].define_port_members()
+
+            for k, v in state_dict.items():
+                if v.is_indexed():
+                    state_args[k] = {}
+                    for i, vv in v.items():
+                        state_args[k][i] = vv.value
+                else:
+                    state_args[k] = v.value
+
+            return state_args
+
+        self.init_args = init_args = dict(
             state_args=state_args,
             outlvl=outlvl,
             solver=solver,
             optarg=optarg,
         )
+
+        self.inlets = dict()
 
         init_log = idaeslog.getInitLogger(self.name, outlvl, tag="unit")
 
@@ -432,6 +454,20 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
 
         opt = get_solver(solver, optarg)
 
+        total_mass_flow_water_in_init = 0
+        total_mass_flow_water_out_init = 0
+        total_mass_flow_salt_out_init = 0
+
+        total_vol_flow_water_in_init = 0
+        total_vol_flow_water_out_init = 0
+
+        self.eq_mass_transfer_term_liq_water.deactivate()
+        self.eq_mass_transfer_term_liq_salt.deactivate()
+        self.eq_overall_steam_flow.deactivate()
+        self.eq_recovery_vol_phase.deactivate()
+        for i, c in self.control_volume.material_balances.items():
+            c.deactivate()
+
         for n, eff in self.effects.items():
             # Each effect is first solved in a vacuum with linking constraints deactivated
             eff.effect.properties_in[0].flow_mass_phase_comp["Liq", "H2O"].fix(
@@ -440,19 +476,42 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
             eff.effect.properties_in[0].flow_mass_phase_comp["Liq", "NaCl"].fix(
                 flow_mass_salt_initial
             )
+            self.inlets[n] = dict()
             if n == 1:
                 if not degrees_of_freedom(eff.effect) == 0:
                     raise InitializationError(
                         f"Degrees of freedom in first effect must be zero during initialization, "
                         f"but has {degrees_of_freedom(eff.effect)}. Check inlet conditions and re-initialize."
                     )
+                
                 eff.effect.initialize(**init_args)
-                inlet_conc = (
+
+                self.inlet_conc = inlet_conc = (
                     eff.effect.properties_in[0]
                     .conc_mass_phase_comp["Liq", "NaCl"]
                     .value
                 )
                 mass_transfer_coeff = eff.effect.overall_heat_transfer_coefficient.value
+
+                # Stash property conditions to use to initialize effect n + 1
+                init_args["state_args"] = get_state_args(eff.effect.properties_out)
+                init_args["state_args_solids"] = get_state_args(
+                    eff.effect.properties_solids
+                )
+                init_args["state_args_vapor"] = get_state_args(
+                    eff.effect.properties_vapor
+                )
+                init_args["state_args_pure_water"] = get_state_args(
+                    eff.effect.properties_pure_water
+                )
+                init_args["pressure_sat"] = eff.effect.properties_pure_water[
+                    0
+                ].pressure_sat.value
+
+                self.steam_flow_init = steam_flow_init = (
+                    eff.effect.heating_steam[0].flow_mass_phase_comp["Vap", "H2O"].value
+                )
+
             else:
                 # Deactivate contraint that links energy flow between effects
                 linking_constr = getattr(
@@ -461,30 +520,202 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
                 linking_constr.deactivate()
                 eff.effect.initialize(**init_args)
                 linking_constr.activate()
+
                 # Fix inlet feed concentration to be equal across all effects
-                eff.effect.properties_in[0].conc_mass_phase_comp["Liq", "NaCl"].fix(
-                    inlet_conc
+                eff.effect.properties_in[0].conc_mass_phase_comp[
+                    "Liq", "NaCl"
+                ].set_value(inlet_conc)
+                eff.effect.properties_in[0].conc_mass_phase_comp["Liq", "NaCl"].setlb(
+                    inlet_conc * 0.99
+                )
+                eff.effect.properties_in[0].conc_mass_phase_comp["Liq", "NaCl"].setub(
+                    inlet_conc * 1.01
                 )
                 eff.effect.overall_heat_transfer_coefficient.fix(mass_transfer_coeff)
+
+                # Stash property conditions to use to initialize effect n + 1
+                init_args["state_args"] = get_state_args(eff.effect.properties_out)
+                init_args["state_args_solids"] = get_state_args(
+                    eff.effect.properties_solids
+                )
+                init_args["state_args_vapor"] = get_state_args(
+                    eff.effect.properties_vapor
+                )
+                init_args["state_args_pure_water"] = get_state_args(
+                    eff.effect.properties_pure_water
+                )
+                init_args["pressure_sat"] = eff.effect.properties_pure_water[
+                    0
+                ].pressure_sat.value
+
+
+            for k, v in init_args.items():
+                self.inlets[n][k] = v
+            
+            total_mass_flow_water_in_init += (
+                eff.effect.properties_in[0].flow_mass_phase_comp["Liq", "H2O"].value
+            )
+            total_mass_flow_water_out_init += init_args["state_args"][
+                "flow_mass_phase_comp"
+            ][("Liq", "H2O")]
+            total_mass_flow_salt_out_init += init_args["state_args"][
+                "flow_mass_phase_comp"
+            ][("Liq", "NaCl")]
+            total_vol_flow_water_in_init += (
+                eff.effect.properties_in[0].flow_vol_phase["Liq"].value
+            )
+            total_vol_flow_water_out_init += (
+                eff.effect.properties_pure_water[0].flow_vol_phase["Liq"].value
+            )
 
             # Unfix inlet mass flow rates to allow unit model to determine based on energy flows
             eff.effect.properties_in[0].flow_mass_phase_comp["Liq", "H2O"].unfix()
             eff.effect.properties_in[0].flow_mass_phase_comp["Liq", "NaCl"].unfix()
 
             init_log.info(f"Initialization of Effect {n} Complete.")
+    
+        self.eq_mass_transfer_term_liq_water.activate()
+        self.eq_mass_transfer_term_liq_salt.activate()
+        self.eq_overall_steam_flow.activate()
+        self.eq_recovery_vol_phase.activate()
+        for i, c in self.control_volume.material_balances.items():
+            c.activate()
+
+        # Guess recovery
+        self.recovery_vol_phase["Liq"].set_value(
+            total_vol_flow_water_out_init / total_vol_flow_water_in_init
+        )
+        
+        # Guess mass transfer terms
+        self.control_volume.mass_transfer_term[0, "Liq", "H2O"].set_value(
+            -1 * total_mass_flow_water_out_init
+        )
+        self.control_volume.mass_transfer_term[0, "Liq", "NaCl"].set_value(
+            -1 * total_mass_flow_salt_out_init
+        )
+
+        # Fix inlet concentration
+        self.control_volume.properties_in[0].conc_mass_phase_comp["Liq", "NaCl"].fix(
+            inlet_conc
+        )
+        self.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "H2O"].unfix()
+        
+        # Guess inlet steam flow
+        self.control_volume.properties_in[0].flow_mass_phase_comp[
+            "Vap", "H2O"
+        ].set_value(steam_flow_init)
+
+        # Guess outlet conditions
+        self.control_volume.properties_out[0].flow_mass_phase_comp[
+            "Liq", "H2O"
+        ].set_value(total_mass_flow_water_in_init - total_mass_flow_water_out_init)
+
+        self.control_volume.properties_out[0].flow_mass_phase_comp[
+            "Liq", "NaCl"
+        ].set_value(
+            init_args["state_args_pure_water"]["flow_mass_phase_comp"][("Liq", "NaCl")]
+        )
+        self.control_volume.properties_out[0].temperature.set_value(
+            init_args["state_args_pure_water"]["temperature"]
+            # 340
+        )
+        self.control_volume.properties_out[0].pressure.set_value(
+            101325
+        )
+        
 
         with idaeslog.solver_log(init_log, idaeslog.DEBUG) as slc:
-            res = opt.solve(self, tee=slc.tee)
-        init_log.info("Initialization Step 3 {}.".format(idaeslog.condition(res)))
+            res1 = opt.solve(self, tee=slc.tee)
+            init_log.info(f"Initialization of {self.name}: first solve {res1.solver.termination_condition}.")
+            self.control_volume.properties_in[0].flow_mass_phase_comp[
+                "Liq", "H2O"
+            ].fix()
+            res2 = opt.solve(self, tee=slc.tee)
+            init_log.info(f"Initialization of {self.name}: second solve {res2.solver.termination_condition}.")
+            for n, eff in self.effects.items():
+                if n not in [self.first_effect, self.last_effect]:
+                    eff.effect.properties_in[0].conc_mass_phase_comp["Liq", "NaCl"].fix()
+            res3 = opt.solve(self, tee=slc.tee)
+        
+        init_log.info(f"Initialization of {self.name}: final solve {res3.solver.termination_condition}.")
 
-        if not check_optimal_termination(res):
+        if not check_optimal_termination(res3):
             raise InitializationError(f"Unit model {self.name} failed to initialize")
+        
+        init_log.info(f"Initialization of {self.name} complete.")
 
     def calculate_scaling_factors(self):
         super().calculate_scaling_factors()
 
         if iscale.get_scaling_factor(self.recovery_vol_phase) is None:
             iscale.set_scaling_factor(self.recovery_vol_phase, 10)
+
+        if iscale.get_scaling_factor(self.eq_mass_transfer_term_liq_water) is None:
+            sf = iscale.get_scaling_factor(
+                self.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "H2O"]
+            )
+            iscale.constraint_scaling_transform(
+                self.eq_mass_transfer_term_liq_water, sf
+            )
+
+        if iscale.get_scaling_factor(self.eq_mass_transfer_term_liq_salt) is None:
+            sf = iscale.get_scaling_factor(
+                self.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "NaCl"]
+            )
+            iscale.constraint_scaling_transform(self.eq_mass_transfer_term_liq_salt, sf)
+
+        # if iscale.get_scaling_factor(self.eq_mass_transfer_term_vap_water) is None:
+        #     sf = iscale.get_scaling_factor(
+        #         self.effects[1]
+        #         .effect.heating_steam[0]
+        #         .flow_mass_phase_comp["Vap", "H2O"]
+        #     )
+        #     iscale.constraint_scaling_transform(
+        #         self.eq_mass_transfer_term_vap_water, sf
+        #     )
+
+        # if iscale.get_scaling_factor(self.eq_overall_steam_flow) is None:
+        #     sf = iscale.get_scaling_factor(
+        #         self.effects[1]
+        #         .effect.heating_steam[0]
+        #         .flow_mass_phase_comp["Vap", "H2O"]
+        #     )
+        #     iscale.constraint_scaling_transform(self.eq_overall_steam_flow, sf)
+
+        # if iscale.get_scaling_factor(self.eq_overall_mass_balance_water_in) is None:
+        #     sf = iscale.get_scaling_factor(
+        #         self.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "H2O"]
+        #     )
+        #     iscale.constraint_scaling_transform(
+        #         self.eq_overall_mass_balance_water_in, sf
+        #     )
+
+        # if iscale.get_scaling_factor(self.eq_overall_mass_balance_salt_in) is None:
+        #     sf = iscale.get_scaling_factor(
+        #         self.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "NaCl"]
+        #     )
+        #     iscale.constraint_scaling_transform(
+        #         self.eq_overall_mass_balance_salt_in, sf
+        #     )
+
+        # for n, eff in self.effects.items():
+        #     c = getattr(eff.effect, f"eq_delta_temperature_inlet_effect_{n}")
+        #     if iscale.get_scaling_factor(c) is None:
+        #         sf = iscale.get_scaling_factor(eff.effect.temperature_operating)
+        #         iscale.constraint_scaling_transform(c, sf)
+        #     c = getattr(eff.effect, f"eq_delta_temperature_outlet_effect_{n}")
+        #     if iscale.get_scaling_factor(c) is None:
+        #         sf = iscale.get_scaling_factor(eff.effect.temperature_operating)
+        #         iscale.constraint_scaling_transform(c, sf)
+        #     c = getattr(eff.effect, f"eq_heat_transfer_effect_{n}")
+        #     if iscale.get_scaling_factor(c) is None:
+        #         sf = iscale.get_scaling_factor(eff.effect.overall_heat_transfer_coefficient)
+        #         iscale.constraint_scaling_transform(c, sf)
+        #     if n > 1:
+        #         c = getattr(eff.effect, f"eq_energy_for_effect_{n}_from_effect_{n - 1}")
+        #         if iscale.get_scaling_factor(c) is None:
+        #             sf = iscale.get_scaling_factor(eff.effect.work_mechanical[0])
+        #             iscale.constraint_scaling_transform(c, sf)
 
     @property
     def default_costing_method(self):
