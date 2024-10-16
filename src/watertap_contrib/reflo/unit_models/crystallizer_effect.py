@@ -453,9 +453,24 @@ class CrystallizerEffectData(CrystallizationData):
         if iscale.get_scaling_factor(self.overall_heat_transfer_coefficient) is None:
             iscale.set_scaling_factor(self.overall_heat_transfer_coefficient, 0.01)
 
-        # if iscale.get_scaling_factor(self.eq_p_con4) is None:
-        #     sf = iscale.get_scaling_factor(self.properties_pure_water[0].pressure)
-        #     iscale.constraint_scaling_transform(self.eq_p_con4, sf)
+        if iscale.get_scaling_factor(self.eq_vapor_energy_constraint) is None:
+            iscale.constraint_scaling_transform(self.eq_vapor_energy_constraint, 1e-2)
+
+        if iscale.get_scaling_factor(self.eq_p_con1) is None:
+            sf = iscale.get_scaling_factor(self.properties_out[0].pressure)
+            iscale.constraint_scaling_transform(self.eq_p_con1, sf)
+
+        if iscale.get_scaling_factor(self.eq_p_con2) is None:
+            sf = iscale.get_scaling_factor(self.properties_solids[0].pressure)
+            iscale.constraint_scaling_transform(self.eq_p_con2, sf)
+
+        if iscale.get_scaling_factor(self.eq_p_con4) is None:
+            sf = iscale.get_scaling_factor(self.properties_pure_water[0].pressure)
+            iscale.constraint_scaling_transform(self.eq_p_con4, sf)
+
+        if iscale.get_scaling_factor(self.eq_p_con5) is None:
+            sf = iscale.get_scaling_factor(self.properties_pure_water[0].pressure_sat)
+            iscale.constraint_scaling_transform(self.eq_p_con5, sf)
 
     @property
     def default_costing_method(self):
