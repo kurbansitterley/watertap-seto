@@ -79,6 +79,9 @@ class CrystallizerEffectData(CrystallizationData):
 
     def build(self):
         super().build()
+        
+        self.properties_in[0].conc_mass_phase_comp["Liq", "NaCl"]
+        self.properties_in[0].flow_vol_phase["Liq"]
 
         tmp_dict = dict(**self.config.property_package_args)
         tmp_dict["has_phase_equilibrium"] = False
@@ -96,8 +99,6 @@ class CrystallizerEffectData(CrystallizationData):
         self.properties_pure_water[0].flow_mass_phase_comp["Vap", "H2O"].fix(0)
         self.properties_pure_water[0].flow_mass_phase_comp["Liq", "NaCl"].fix(0)
         self.properties_pure_water[0].flow_mass_phase_comp["Sol", "NaCl"].fix(0)
-        self.properties_in[0].conc_mass_phase_comp["Liq", "NaCl"]
-        self.properties_in[0].flow_vol_phase["Liq"]
 
         self.inlet.temperature.setub(1000)
         self.outlet.temperature.setub(1000)
@@ -260,12 +261,17 @@ class CrystallizerEffectData(CrystallizationData):
     def initialize_build(
         self,
         state_args=None,
+        state_args_solids=None,
+        state_args_vapor=None,
+        state_args_pure_water=None,
+        state_args_steam=None,
+        pressure_sat=None,
         outlvl=idaeslog.NOTSET,
         solver=None,
         optarg=None,
     ):
         """
-        General wrapper for pressure changer initialization routines
+        General wrapper for initialization routines
 
         Keyword Arguments:
             state_args : a dict of arguments to be passed to the property
@@ -293,6 +299,11 @@ class CrystallizerEffectData(CrystallizationData):
         )
         init_log.info_high("Initialization Step 1 Complete.")
 
+        if pressure_sat is None:
+            pressure_sat_init = self.pressure_operating.value
+        else:
+            pressure_sat_init = pressure_sat
+
         if state_args is None:
             state_args = {}
             state_dict = self.properties_in[
@@ -302,15 +313,15 @@ class CrystallizerEffectData(CrystallizationData):
             for k in state_dict.keys():
                 if state_dict[k].is_indexed():
                     state_args[k] = {}
-                    for m in state_dict[k].keys():
-                        state_args[k][m] = state_dict[k][m].value
+                    for i in state_dict[k].keys():
+                        state_args[k][i] = state_dict[k][i].value
                 else:
                     state_args[k] = state_dict[k].value
 
             state_args["pressure"] = self.pressure_operating.value
             state_args["temperature"] = 340
 
-        self.properties_out[0].pressure_sat.set_value(self.pressure_operating.value)
+        self.properties_out[0].pressure_sat.set_value(pressure_sat_init)
         self.properties_out.initialize(
             outlvl=outlvl,
             optarg=optarg,
@@ -318,15 +329,16 @@ class CrystallizerEffectData(CrystallizationData):
             state_args=state_args,
         )
 
-        state_args_solids = deepcopy(state_args)
+        if state_args_solids is None:
+            state_args_solids = deepcopy(state_args)
 
-        for p, j in self.properties_solids.phase_component_set:
-            if p == "Sol":
-                state_args_solids["flow_mass_phase_comp"][p, j] = state_args[
-                    "flow_mass_phase_comp"
-                ]["Liq", j]
-            elif p in ["Liq", "Vap"]:
-                state_args_solids["flow_mass_phase_comp"][p, j] = 1e-8
+            for p, j in self.properties_solids.phase_component_set:
+                if p == "Sol":
+                    state_args_solids["flow_mass_phase_comp"][p, j] = state_args[
+                        "flow_mass_phase_comp"
+                    ]["Liq", j]
+                elif p in ["Liq", "Vap"]:
+                    state_args_solids["flow_mass_phase_comp"][p, j] = 1e-8
 
         self.properties_solids.initialize(
             outlvl=outlvl,
@@ -334,16 +346,17 @@ class CrystallizerEffectData(CrystallizationData):
             solver=solver,
             state_args=state_args_solids,
         )
+        
+        if state_args_vapor is None:
+            state_args_vapor = deepcopy(state_args)
 
-        state_args_vapor = deepcopy(state_args)
-
-        for p, j in self.properties_vapor.phase_component_set:
-            if p == "Vap":
-                state_args_vapor["flow_mass_phase_comp"][p, j] = state_args[
-                    "flow_mass_phase_comp"
-                ]["Liq", j]
-            elif p in ["Liq", "Sol"]:
-                state_args_vapor["flow_mass_phase_comp"][p, j] = 1e-8
+            for p, j in self.properties_vapor.phase_component_set:
+                if p == "Vap":
+                    state_args_vapor["flow_mass_phase_comp"][p, j] = state_args[
+                        "flow_mass_phase_comp"
+                    ]["Liq", j]
+                elif p in ["Liq", "Sol"]:
+                    state_args_vapor["flow_mass_phase_comp"][p, j] = 1e-8
 
         self.properties_vapor.initialize(
             outlvl=outlvl,
@@ -352,20 +365,21 @@ class CrystallizerEffectData(CrystallizationData):
             state_args=state_args_vapor,
         )
 
-        state_args_pure_water = deepcopy(state_args_vapor)
+        if state_args_pure_water is None:
+            state_args_pure_water = deepcopy(state_args_vapor)
 
-        for p, j in self.properties_pure_water.phase_component_set:
-            if (p, j) == ("Liq", "NaCl"):
-                state_args_pure_water["flow_mass_phase_comp"][p, j] = 1e-8
-            if (p, j) == ("Liq", "H2O"):
-                state_args_pure_water["flow_mass_phase_comp"][p, j] = state_args_vapor[
-                    "flow_mass_phase_comp"
-                ]["Vap", j]
-            elif p in ["Vap", "Sol"]:
-                state_args_pure_water["flow_mass_phase_comp"][p, j] = 1e-8
+            for p, j in self.properties_pure_water.phase_component_set:
+                if (p, j) == ("Liq", "NaCl"):
+                    state_args_pure_water["flow_mass_phase_comp"][p, j] = 1e-8
+                if (p, j) == ("Liq", "H2O"):
+                    state_args_pure_water["flow_mass_phase_comp"][p, j] = state_args_vapor[
+                        "flow_mass_phase_comp"
+                    ]["Vap", j]
+                elif p in ["Vap", "Sol"]:
+                    state_args_pure_water["flow_mass_phase_comp"][p, j] = 1e-8
 
         self.properties_pure_water[0].pressure_sat.set_value(
-            self.pressure_operating.value
+            pressure_sat_init
         )
         self.properties_pure_water.initialize(
             outlvl=outlvl,
@@ -375,11 +389,12 @@ class CrystallizerEffectData(CrystallizationData):
         )
 
         if hasattr(self, "heating_steam"):
-            
-            state_args_steam = deepcopy(state_args_vapor)
 
-            for p, j in self.properties_vapor.phase_component_set:
-                state_args_steam["flow_mass_phase_comp"][p, j] = 1
+            if state_args_steam is None:
+                state_args_steam = deepcopy(state_args_vapor)
+
+                for p, j in self.properties_vapor.phase_component_set:
+                    state_args_steam["flow_mass_phase_comp"][p, j] = 1
 
             self.heating_steam.initialize(
                 outlvl=outlvl,
@@ -440,9 +455,9 @@ class CrystallizerEffectData(CrystallizationData):
         if iscale.get_scaling_factor(self.overall_heat_transfer_coefficient) is None:
             iscale.set_scaling_factor(self.overall_heat_transfer_coefficient, 0.01)
 
-        for _, c in self.eq_p_con4.items():
-            sf = iscale.get_scaling_factor(self.properties_pure_water[0].pressure)
-            iscale.constraint_scaling_transform(c, sf)
+        # if iscale.get_scaling_factor(self.eq_p_con4) is None:
+        #     sf = iscale.get_scaling_factor(self.properties_pure_water[0].pressure)
+        #     iscale.constraint_scaling_transform(self.eq_p_con4, sf)
 
     @property
     def default_costing_method(self):
