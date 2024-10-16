@@ -317,11 +317,30 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
                     f"eq_energy_for_effect_{n}_from_effect_{n - 1}", energy_flow_constr
                 )
 
-        @self.Constraint(doc="Mass transfer term for liquid water")
-        def eq_mass_transfer_term_liq_water(b):
-            return b.control_volume.mass_transfer_term[0, "Liq", "H2O"] == -1 * (
-                total_mass_flow_water_out_expr
+        @self.Constraint(doc="Mass flow out for liquid water")
+        def eq_mass_flow_out_liq_water(b):
+            return (
+                b.control_volume.properties_out[0].flow_mass_phase_comp["Liq", "H2O"]
+                == total_mass_flow_pure_water_out_expr
             )
+
+        @self.Constraint(doc="Mass flow out for liquid salt")
+        def eq_mass_flow_out_liq_salt(b):
+            expr = 0
+            for n, eff in b.effects.items():
+                expr += eff.effect.properties_pure_water[0].flow_mass_phase_comp[
+                    "Liq", "NaCl"
+                ]
+            return (
+                b.control_volume.properties_out[0].flow_mass_phase_comp["Liq", "NaCl"]
+                == expr
+            )
+
+        # @self.Constraint(doc="Mass transfer term for liquid water")
+        # def eq_mass_transfer_term_liq_water(b):
+        #     return b.control_volume.mass_transfer_term[0, "Liq", "H2O"] == -1 * (
+        #         total_mass_flow_water_out_expr
+        #     )
 
         # @self.Constraint(doc="Mass transfer term for vapor water")
         # def eq_mass_transfer_term_vap_water(b):
@@ -330,23 +349,23 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
         #     )
         # self.control_volume.mass_transfer_term[0, "Vap", "H2O"].fix(0)
 
-        @self.Constraint(doc="Mass transfer term for salt in liquid phase")
-        def eq_mass_transfer_term_liq_salt(b):
-            return b.control_volume.mass_transfer_term[0, "Liq", "NaCl"] == -1 * (
-                total_mass_flow_salt_out_expr
-            )
+        # @self.Constraint(doc="Mass transfer term for salt in liquid phase")
+        # def eq_mass_transfer_term_liq_salt(b):
+        #     return b.control_volume.mass_transfer_term[0, "Liq", "NaCl"] == -1 * (
+        #         total_mass_flow_salt_out_expr
+        #     )
 
-        # self.control_volume.properties_in[0].flow_mass_phase_comp["Vap", "H2O"].fix(0)
+        self.control_volume.properties_in[0].flow_mass_phase_comp["Vap", "H2O"].fix(0)
         self.control_volume.properties_out[0].flow_mass_phase_comp["Vap", "H2O"].fix(0)
 
-        @self.Constraint(doc="Steam flow")
-        def eq_overall_steam_flow(b):
-            return (
-                b.control_volume.properties_in[0].flow_mass_phase_comp["Vap", "H2O"]
-                == b.effects[1]
-                .effect.heating_steam[0]
-                .flow_mass_phase_comp["Vap", "H2O"]
-            )
+        # @self.Constraint(doc="Steam flow")
+        # def eq_overall_steam_flow(b):
+        #     return (
+        #         b.control_volume.properties_in[0].flow_mass_phase_comp["Vap", "H2O"]
+        #         == b.effects[1]
+        #         .effect.heating_steam[0]
+        #         .flow_mass_phase_comp["Vap", "H2O"]
+        #     )
 
         @self.Constraint(doc="Mass balance of water for all effects")
         def eq_overall_mass_balance_water_in(b):
@@ -461,9 +480,9 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
         total_vol_flow_water_in_init = 0
         total_vol_flow_water_out_init = 0
 
-        self.eq_mass_transfer_term_liq_water.deactivate()
-        self.eq_mass_transfer_term_liq_salt.deactivate()
-        self.eq_overall_steam_flow.deactivate()
+        # self.eq_mass_transfer_term_liq_water.deactivate()
+        # self.eq_mass_transfer_term_liq_salt.deactivate()
+        # self.eq_overall_steam_flow.deactivate()
         self.eq_recovery_vol_phase.deactivate()
         for i, c in self.control_volume.material_balances.items():
             c.deactivate()
@@ -573,9 +592,9 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
 
             init_log.info(f"Initialization of Effect {n} Complete.")
 
-        self.eq_mass_transfer_term_liq_water.activate()
-        self.eq_mass_transfer_term_liq_salt.activate()
-        self.eq_overall_steam_flow.activate()
+        # self.eq_mass_transfer_term_liq_water.activate()
+        # self.eq_mass_transfer_term_liq_salt.activate()
+        # self.eq_overall_steam_flow.activate()
         self.eq_recovery_vol_phase.activate()
         for i, c in self.control_volume.material_balances.items():
             c.activate()
@@ -654,19 +673,20 @@ class MultiEffectCrystallizerData(InitializationMixin, UnitModelBlockData):
         if iscale.get_scaling_factor(self.recovery_vol_phase) is None:
             iscale.set_scaling_factor(self.recovery_vol_phase, 10)
 
-        if iscale.get_scaling_factor(self.eq_mass_transfer_term_liq_water) is None:
-            sf = iscale.get_scaling_factor(
-                self.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "H2O"]
-            )
-            iscale.constraint_scaling_transform(
-                self.eq_mass_transfer_term_liq_water, sf
-            )
+        # if iscale.get_scaling_factor(self.eq_mass_transfer_term_liq_water) is None:
+        #     sf = iscale.get_scaling_factor(
+        #         self.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "H2O"]
+        #     )
+        #     iscale.constraint_scaling_transform(
+        #         self.eq_mass_transfer_term_liq_water, 10
+        #     )
 
-        if iscale.get_scaling_factor(self.eq_mass_transfer_term_liq_salt) is None:
-            sf = iscale.get_scaling_factor(
-                self.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "NaCl"]
-            )
-            iscale.constraint_scaling_transform(self.eq_mass_transfer_term_liq_salt, sf)
+        # if iscale.get_scaling_factor(self.eq_mass_transfer_term_liq_salt) is None:
+        #     sf = iscale.get_scaling_factor(
+        #         self.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "NaCl"]
+        #     )
+
+        #     iscale.constraint_scaling_transform(self.eq_mass_transfer_term_liq_salt, 10)
 
         # if iscale.get_scaling_factor(self.eq_mass_transfer_term_vap_water) is None:
         #     sf = iscale.get_scaling_factor(
